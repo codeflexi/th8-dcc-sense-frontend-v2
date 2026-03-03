@@ -11,7 +11,10 @@ import type {
   EvidenceItem,
   DecisionRunViewContext,
   DecisionRunItem,
+  CaseAggregateResponse,
+  DecisionRunSummary
 } from './types'
+
 
 type RightPanelTab = 'WHY' | 'EVIDENCE'
 
@@ -44,13 +47,10 @@ function mapDecisionRunItemToGroup(it: DecisionRunItem): CaseGroup {
 
   const poUnit = safeNum(price?.po_unit)
   const invUnit = safeNum(price?.inv_unit)
-  const baselineUnit =
-    price?.baseline_unit != null ? safeNum(price?.baseline_unit) : null
+  const baselineUnit = price?.baseline_unit != null ? safeNum(price?.baseline_unit) : null
 
   const total =
-    invUnit && qty?.inv != null
-      ? invUnit * safeNum(qty?.inv)
-      : poUnit * safeNum(qty?.po)
+    invUnit && qty?.inv != null ? invUnit * safeNum(qty?.inv) : poUnit * safeNum(qty?.po)
 
   const cur = String(price?.currency || 'THB')
 
@@ -81,9 +81,7 @@ function mapDecisionRunItemToGroup(it: DecisionRunItem): CaseGroup {
     },
 
     baseline:
-      ctx === 'BASELINE' && baselineUnit != null
-        ? { value: baselineUnit, currency: cur }
-        : undefined,
+      ctx === 'BASELINE' && baselineUnit != null ? { value: baselineUnit, currency: cur } : undefined,
 
     reasons: Array.isArray(it?.drivers)
       ? it.drivers.map((d: any) => ({
@@ -116,61 +114,68 @@ export const useDecisionRunStore = defineStore('decisionRun', () => {
 
   const rulesCache = ref<Record<string, GroupRulesResponse>>({})
   const evidenceCache = ref<Record<string, GroupEvidenceResponse>>({})
+  const caseMaster = ref<DecisionRunSummary | null>(null)
 
   /* ===============================
-     PDF Viewer (แก้ให้ถูก)
+     PDF Viewer (เดิม)
   =============================== */
 
   const pdfViewerUrl = ref<string | null>(null)
 
-async function openPdf(documentId: string, page?: number) {
-  console.log('OPEN PDF CLICKED', documentId, page)
-
-  const url = await decisionRunApi.getDocumentPagePdfUrl(
-    documentId,
-    page || 1
-  )
-
-  console.log('SIGNED URL', url)
-
-  pdfViewerUrl.value = url
-}
+  async function openPdf(documentId: string, page?: number) {
+    const url = await decisionRunApi.getDocumentPagePdfUrl(documentId, page || 1)
+    pdfViewerUrl.value = url
+  }
 
   function closePdf() {
     pdfViewerUrl.value = null
   }
 
   /* ===============================
-     Derived
+     Header Aggregate (NEW, isolated)
   =============================== */
 
-  const activeGroup = computed(() =>
-    groups.value.find(g => g.group_id === activeGroupId.value) || null
-  )
+  const caseAggregate = ref<CaseAggregateResponse | null>(null)
+  const loadingCaseAggregate = ref(false)
+  const rerunningCase = ref(false)
+  
+
+  async function rerunCase(caseId: string) {
+    if (!caseId) return
+    rerunningCase.value = true
+    try {
+      await decisionRunApi.rerunCase(caseId)
+      // refresh header + body
+      // await loadCaseAggregate(caseId)
+      await loadCase(caseId)
+    } finally {
+      rerunningCase.value = false
+    }
+  }
+
+  /* ===============================
+     Derived (เดิม)
+  =============================== */
+
+  const activeGroup = computed(() => groups.value.find(g => g.group_id === activeGroupId.value) || null)
 
   const activeRules = computed<GroupRule[]>(() => {
     const gid = activeGroupId.value
-    return gid && rulesCache.value[gid]?.rules
-      ? rulesCache.value[gid].rules
-      : []
+    return gid && rulesCache.value[gid]?.rules ? rulesCache.value[gid].rules : []
   })
 
   const activeEvidenceDocs = computed<EvidenceDocument[]>(() => {
     const gid = activeGroupId.value
-    return gid && evidenceCache.value[gid]?.documents
-      ? evidenceCache.value[gid].documents
-      : []
+    return gid && evidenceCache.value[gid]?.documents ? evidenceCache.value[gid].documents : []
   })
 
   const activeEvidenceItems = computed<EvidenceItem[]>(() => {
     const gid = activeGroupId.value
-    return gid && evidenceCache.value[gid]?.evidences
-      ? evidenceCache.value[gid].evidences
-      : []
+    return gid && evidenceCache.value[gid]?.evidences ? evidenceCache.value[gid].evidences : []
   })
 
   /* ===============================
-     Internal
+     Internal (เดิม)
   =============================== */
 
   function resetForNewCase(caseId: string) {
@@ -181,6 +186,7 @@ async function openPdf(documentId: string, page?: number) {
     rulesCache.value = {}
     evidenceCache.value = {}
     pdfViewerUrl.value = null
+    // IMPORTANT: do NOT reset caseAggregate (header โหลดแยก)
   }
 
   async function preloadAllEvidence() {
@@ -212,17 +218,14 @@ async function openPdf(documentId: string, page?: number) {
     loadingGroups.value = true
 
     try {
-      const view: DecisionRunViewContext =
-        await decisionRunApi.getDecisionRunView(caseId)
-
+      const view: DecisionRunViewContext = await decisionRunApi.getDecisionRunView(caseId)
+      caseMaster.value = view.summary
+      
       const items = Array.isArray(view.items) ? view.items : []
-
       const mapped = items.map(mapDecisionRunItemToGroup)
 
       groups.value = [...mapped].sort(
-        (a, b) =>
-          riskScore(String(b.risk_level || '')) -
-          riskScore(String(a.risk_level || ''))
+        (a, b) => riskScore(String(b.risk_level || '')) - riskScore(String(a.risk_level || ''))
       )
 
       const nextRules: Record<string, GroupRulesResponse> = {}
@@ -260,19 +263,14 @@ async function openPdf(documentId: string, page?: number) {
     }
   }
 
-  async function selectGroup(
-    groupId: string,
-    opts?: { openEvidence?: boolean }
-  ) {
+  async function selectGroup(groupId: string, opts?: { openEvidence?: boolean }) {
     if (!groupId) return
-
     activeGroupId.value = groupId
-
-    const openEvidence = !!opts?.openEvidence
-    activeTab.value = openEvidence ? 'EVIDENCE' : 'WHY'
+    activeTab.value = opts?.openEvidence ? 'EVIDENCE' : 'WHY'
   }
 
   return {
+    // existing exports
     currentCaseId,
     groups,
     activeGroupId,
@@ -292,5 +290,13 @@ async function openPdf(documentId: string, page?: number) {
 
     loadCase,
     selectGroup,
+
+    // header exports (NEW)
+    caseMaster,
+    caseAggregate,
+    loadingCaseAggregate,
+    rerunningCase,
+ 
+    rerunCase,
   }
 })

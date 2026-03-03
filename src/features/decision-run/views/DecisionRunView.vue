@@ -1,95 +1,92 @@
 <script setup lang="ts">
-import { computed, watch, ref } from 'vue'
+import { computed, watch , onMounted } from 'vue'
 import { useDecisionRunStore } from '@/features/decision-run/store'
 import DecisionWhyPanel from './components/DecisionWhyPanel.vue'
 import DecisionEvidencePanel from './components/EvidenceCard.vue'
 import { useRoute } from 'vue-router'
+import { useCaseStore } from '@/features/decision-run/case_master_store'
+import { formatTsBKK } from '@/utils/datetime'
+import { storeToRefs } from 'pinia'
 
-const props = defineProps<{ caseId: string }>()
 
 const route = useRoute()
 const store = useDecisionRunStore()
+const caseStore = useCaseStore()
+const { headerVM, lineItems, isLineItemsExpanded, loadingAggregate } = storeToRefs(caseStore)
+
 
 const caseId = computed(() => String(route.params.caseId || ''))
 
-watch(caseId, (id) => {
-  if (!id) return
-  store.loadCase(id)
-}, { immediate: true })
 
+// โหลด aggregate ตอนเข้า page
+onMounted(() => {
+  if (!caseId) return
+  caseStore.loadCaseAggregate(caseId.value)
+})
+/* =========================================================
+   LOAD BOTH: header (aggregate) + body (decision run view)
+========================================================= */
+watch(
+  caseId,
+  async (id) => {
+    if (!id) return
+    await caseStore.loadCaseAggregate(caseId.value)  // HEADER SOURCE (meta + view merged)
+    await store.loadCase(id)            // BODY SOURCE (เดิม)
+  },
+  { immediate: true }
+)
+
+/* =========================================================
+   HEADER SOURCE (from store.caseAggregate)
+========================================================= */
+const agg = computed(() => store.caseAggregate)
+const caseMeta = computed(() => caseStore.headerVM)
+
+const summary = computed(() => store.caseMaster)
+
+
+const displayRef = computed(() => caseMeta.value?.reference_id || caseId.value)
+const vendorName = computed(() => caseMeta.value?.vendor_name || '—')
+const caseStatus = computed(() => caseMeta.value?.status || '—')
+const caseDomain = computed(() => caseMeta.value?.domain || '—')
+
+// const lastUpdatedBkk = computed(() => {
+//   const ts = caseMeta.value?.updated_at
+//   if (!ts) return '—'
+//   return new Date(ts).toLocaleString('th-TH', { timeZone: 'Asia/Bangkok', hour12: false }) + ' ICT'
+// })
+
+const lastUpdatedBkk = computed(() => {
+   caseMeta.value?.updated_at
+})
+
+
+
+// ✅ ใช้ summary เป็นแหล่ง truth ของ badge
+const headerDecision = computed(() => caseMeta.value?.decision || '—')
+const headerRisk = computed(() => caseMeta.value?.risk || '—')
+const headerConfidence = computed(() => {
+  const c = caseMeta.value?.confidence
+  return c != null ? Math.round(c * 100) : 0
+})
+
+const itemCount = computed(() => caseMeta.value?.item_count || 0)
+const exposure = computed(() => summary.value?.exposure?.unit_variance_sum || 0)
+const exposureCurrency = computed(() => summary.value?.exposure?.currency || 'THB')
+const topReasonCodes = computed(() => summary.value?.top_reason_codes || [])
+
+function  rerun() {
+  if (!caseId.value) return
+  store.rerunCase(caseId.value)
+  caseStore.loadCaseAggregate(caseId.value)
+}
 
 /* ===============================
- * Derived KPIs (จาก groups)
+ * BODY HELPERS (คืนทั้งหมด)
  * =============================== */
-const totalAmount = computed(() => {
-  const list = store.groups || []
-  return list.reduce((sum, g) => sum + (g?.sku?.total_price?.value || 0), 0)
-})
 
-const currency = computed(() => {
-  const first = store.groups?.[0]
-  return first?.sku?.total_price?.currency || first?.sku?.unit_price?.currency || first?.baseline?.currency || 'THB'
-})
-
-const itemsToReview = computed(() => {
-  return (store.groups || []).filter(g => String(g.decision).toUpperCase() === 'REVIEW').length
-})
-
-const overallRisk = computed(() => {
-  const list = store.groups || []
-  if (!list.length) return '—'
-  const max = Math.max(...list.map(g => (
-    String(g.risk_level).toUpperCase() === 'CRITICAL' ? 4 :
-    String(g.risk_level).toUpperCase() === 'HIGH' ? 3 :
-    (String(g.risk_level).toUpperCase() === 'MEDIUM' || String(g.risk_level).toUpperCase() === 'MED') ? 2 :
-    String(g.risk_level).toUpperCase() === 'LOW' ? 1 : 0
-  )))
-  return max === 4 ? 'CRITICAL' : max === 3 ? 'HIGH' : max === 2 ? 'MEDIUM' : 'LOW'
-})
-
-const overallDecision = computed(() => {
-  const list = store.groups || []
-  if (!list.length) return '—'
-  const hasReview = list.some(g => String(g.decision).toUpperCase() === 'REVIEW')
-  return hasReview ? 'REVIEW' : 'PASS'
-})
-
-const overallConfidence = computed(() => {
-  if (store.activeGroup?.confidence != null) return Math.round((store.activeGroup.confidence || 0) * 100)
-  const list = store.groups || []
-  if (!list.length) return 0
-  const avg = list.reduce((s, g) => s + (g.confidence || 0), 0) / list.length
-  return Math.round(avg * 100)
-})
-
-const caseHeader = computed(() => {
-  const risk = overallRisk.value
-  const reviewCount = itemsToReview.value
-
-  return {
-    risk,
-    reviewCount,
-    autoApprovable: risk === 'LOW' && reviewCount === 0
-  }
-})
-
-const pdfViewer = computed(() => store.pdfViewer)
-
-/* ===============================
- * Display helpers
- * =============================== */
-const displayDoc = computed(() => {
-  return `Case ${caseId.value}`
-})
-
-const vendorName = computed(() => {
-  return 'Unknown vendor'
-})
-
-/* ===============================
- * UI Helpers
- * =============================== */
 const fmt = (n: number) => new Intl.NumberFormat('th-TH').format(n || 0)
+
 const fmtPct2 = (n: any) => {
   const v = Number(n)
   if (!Number.isFinite(v)) return '—'
@@ -130,7 +127,7 @@ function get3WayVariancePct(g: any) {
 }
 
 function get3WayVarianceAbs(g: any) {
-  return g?.raw_trace?.price?.variance_abs
+  return g?.raw_trace?.price?.variance_abs 
 }
 
 function isWithinTolerance(g: any): boolean | null {
@@ -161,13 +158,6 @@ function severityBadge(sev?: string) {
   return 'bg-slate-100 text-slate-700 border-slate-200'
 }
 
-function ruleCardClass(result?: string) {
-  const x = String(result || '').toUpperCase()
-  if (x === 'FAIL') return 'border-rose-200 bg-rose-50/40'
-  if (x === 'PASS') return 'border-emerald-200 bg-emerald-50/40'
-  return 'border-slate-200 bg-white'
-}
-
 function variancePct(orderUnit?: number, baselineUnit?: number) {
   const o = Number(orderUnit)
   const b = Number(baselineUnit)
@@ -175,83 +165,109 @@ function variancePct(orderUnit?: number, baselineUnit?: number) {
   return ((o - b) / b) * 100
 }
 </script>
-
 <template>
   <div class="min-h-screen bg-slate-50">
 
-    <!-- ================= HEADER ================= -->
-    <div class="border-b border-slate-200 bg-white">
-      <div class="max-w-7xl mx-auto px-6 py-6">
-        <div class="flex flex-col md:flex-row md:items-start md:justify-between gap-4">
 
-          <div class="min-w-0">
-            <div class="text-xs font-semibold text-slate-500 uppercase tracking-wider">
-              TH8 Sense · Decision Run
-            </div>
+<!-- ================= ENTERPRISE HEADER ================= -->
+<div class="border-b border-slate-200 bg-white">
+  <div class="max-w-7xl mx-auto px-6 py-6">
+    <div class="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-6">
 
-            <div class="mt-1 text-2xl font-black text-slate-900">
-              <div>
-                <div class="text-2xl font-extrabold text-slate-900">
-                  {{ displayDoc }}
-                </div>
+      <!-- LEFT -->
+      <div class="min-w-0">
+        <div class="text-xs font-semibold text-slate-500 uppercase tracking-wider">
+          TH8 Sense · Decision Control Center
+        </div>
 
-                <div class="text-sm text-slate-600 mt-1">
-                  {{ vendorName }}
-                </div>
-              </div>
-            </div>
+        <div class="mt-2 text-2xl font-black text-slate-900 truncate">
+          {{ displayRef }} 
+        </div>
 
-            <div class="mt-2 flex flex-wrap items-center gap-2 text-sm">
-              <span
-                class="px-3 py-1 rounded-full border text-xs font-extrabold"
-                :class="decisionBadge(overallDecision)"
-              >
-                {{ String(overallDecision).toUpperCase() }}
-              </span>
+        <div class="mt-1 text-sm text-slate-600">
+          {{ vendorName }}
+        </div>
 
-              <span
-                class="px-3 py-1 rounded-full border text-xs font-extrabold"
-                :class="riskBadge(overallRisk)"
-              >
-                {{ String(overallRisk).toUpperCase() }} RISK
-              </span>
+        <div class="mt-3 flex flex-wrap items-center gap-2 text-xs text-slate-600">
+          <span class="px-2 py-1 rounded bg-slate-100 font-semibold">
+            {{ caseDomain }}
+          </span>
 
-              <span class="text-slate-400">•</span>
-              <span class="text-slate-700">
-                {{ itemsToReview }} line item requires manual review
-              </span>
+          <span class="px-2 py-1 rounded bg-slate-100 font-semibold">
+            Status: {{ caseStatus }}
+          </span>
 
-              <span class="text-slate-400">•</span>
-              <span class="text-slate-700">
-                Total {{ fmt(totalAmount) }} {{ currency }}
-              </span>
+          <span class="text-slate-400">•</span>
+          <span>{{ itemCount }} items</span>
 
-              <span class="text-slate-400">•</span>
-              <span class="text-slate-700">
-                Confidence {{ overallConfidence }}%
-              </span>
-            </div>
-          </div>
+          <span class="text-slate-400">•</span>
+          <span>Exposure {{ fmt(exposure) }} {{ exposureCurrency }}</span>
 
-          <div class="flex items-center gap-2">
-            <button
-              class="px-4 py-2 rounded-xl border border-slate-200 bg-white text-slate-800 font-semibold hover:bg-slate-50"
-              @click="store.activeGroupId && store.selectGroup(store.activeGroupId, { openEvidence: true })"
-            >
-              Open Evidence ({{ store.activeEvidenceItems.length }})
-            </button>
+          <span class="text-slate-400">•</span>
+      
+          <span> Updated  {{ formatTsBKK(caseStore.headerVM?.updated_at)}} </span>
+        </div>
 
-            <button class="px-5 py-2 rounded-xl bg-slate-900 text-white font-semibold hover:bg-slate-800">
-              Approve
-            </button>
-            <button class="px-5 py-2 rounded-xl border border-slate-200 bg-white text-slate-800 font-semibold hover:bg-slate-50">
-              Reject
-            </button>
-          </div>
+        
 
+        <div v-if="topReasonCodes.length" class="mt-3 flex flex-wrap gap-2">
+          <span
+            v-for="r in topReasonCodes"
+            :key="r.code"
+            class="text-[11px] px-2 py-1 rounded-lg border border-slate-200 bg-slate-50 text-slate-700 font-semibold"
+          >
+            {{ r.code }} · {{ r.count }}
+          </span>
         </div>
       </div>
+
+      <!-- RIGHT CONTROL PANEL -->
+      <div class="flex flex-col items-end gap-3">
+        <div class="flex items-center gap-2 text-sm">
+          <span
+            class="px-3 py-1 rounded-full border text-xs font-extrabold"
+            :class="decisionBadge(headerDecision)"
+          >
+            {{ headerDecision }}
+          </span>
+
+          <span
+            class="px-3 py-1 rounded-full border text-xs font-extrabold"
+            :class="riskBadge(headerRisk)"
+          >
+            {{ headerRisk }} RISK
+          </span>
+
+          <span class="text-slate-500">
+            Confidence {{ headerConfidence }}%
+          </span>
+        </div>
+
+        <div class="flex items-center gap-2">
+          <button
+            class="px-4 py-2 rounded-xl border border-slate-200 bg-white text-slate-800 font-semibold hover:bg-slate-50"
+            @click="rerun"
+            :disabled="store.rerunningCase"
+          >
+            <span v-if="!store.rerunningCase">Re-run</span>
+            <span v-else>Running...</span>
+          </button>
+
+          <button class="px-5 py-2 rounded-xl bg-slate-900 text-white font-semibold hover:bg-slate-800">
+            Approve
+          </button>
+
+          <button class="px-5 py-2 rounded-xl border border-slate-200 bg-white text-slate-800 font-semibold hover:bg-slate-50">
+            Reject
+          </button>
+        </div>
+      </div>
+
     </div>
+  </div>
+</div>
+
+
 
     <!-- ================= BODY ================= -->
     <div class="max-w-7xl mx-auto px-6 py-6">
@@ -381,7 +397,7 @@ function variancePct(orderUnit?: number, baselineUnit?: number) {
                         {{ fmt(getPoUnit(g) || 0) }}
                       </div>
                       <div class="text-[10px] text-slate-400">
-                        {{ currency }}
+                        {{ exposureCurrency }}
                       </div>
                     </template>
 
@@ -390,7 +406,7 @@ function variancePct(orderUnit?: number, baselineUnit?: number) {
                         {{ fmt(g?.sku ? (g?.sku?.unit_price?.value || 0) : 0) }}
                       </div>
                       <div class="text-[10px] text-slate-400">
-                        {{ (g?.sku?.unit_price?.currency || currency) }}
+                        {{ (g?.sku?.unit_price?.currency || exposureCurrency) }}
                       </div>
                     </template>
                   </div>
@@ -402,7 +418,7 @@ function variancePct(orderUnit?: number, baselineUnit?: number) {
                         {{ fmt(getInvUnit(g) || 0) }}
                       </div>
                       <div class="text-[10px] text-slate-400">
-                        {{ currency }}
+                        {{ exposureCurrency }}
                       </div>
                     </template>
 
@@ -411,7 +427,7 @@ function variancePct(orderUnit?: number, baselineUnit?: number) {
                         {{ fmt(g?.baseline?.value || 0) }}
                       </div>
                       <div class="text-[10px] text-slate-400">
-                        {{ g?.baseline?.currency || currency }}
+                        {{ g?.baseline?.currency || exposureCurrency }}
                       </div>
                     </template>
                   </div>
@@ -472,7 +488,7 @@ function variancePct(orderUnit?: number, baselineUnit?: number) {
                     <button
                       class="px-3 py-1.5 rounded-xl text-xs font-extrabold border"
                       :class="store.activeGroupId === g.group_id
-                        ? 'bg-slate-900 text-white border-slate-900'
+                        ? 'bg-slate-700 text-white border-slate-700'
                         : 'bg-white text-slate-800 border-slate-200 hover:bg-slate-50'"
                       @click.stop="store.selectGroup(g.group_id, { openEvidence: false })"
                     >
@@ -485,7 +501,13 @@ function variancePct(orderUnit?: number, baselineUnit?: number) {
                         ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
                         : 'bg-amber-50 text-amber-700 border-amber-200'"
                     >
-                      {{ String(g.decision).toUpperCase() === 'PASS' || String(g.decision).toUpperCase() === 'APPROVE' ? 'PASS' : 'REVIEW' }}
+
+                    <span
+  class="mt-2 text-[11px] font-extrabold inline-flex px-2 py-1 rounded-lg border"
+  :class="decisionBadge(g.decision)"
+>
+  {{ String(g.decision).toUpperCase() }}
+</span>
                     </div>
                   </div>
 
@@ -547,17 +569,122 @@ function variancePct(orderUnit?: number, baselineUnit?: number) {
                    
                   />
                 </div>
+
+
+
+
               </template>
             </div>
           </div>
         </div>
 
+
+
+        
       </div>
     </div>
 
- 
+  </div>
+
+<div class="p-6 space-y-6">
+
+    <!-- Loading -->
+    <div v-if="caseStore.loadingAggregate">
+      Loading...
+    </div>
+
+    <!-- Header -->
+    <div
+      v-if="caseStore.headerVM"
+      class="bg-white p-6 rounded border"
+    >
+      <div class="flex justify-between items-start">
+
+        <div>
+          <div class="text-xl font-semibold">
+            {{ caseStore.headerVM.reference_id }}
+          </div>
+
+          <div class="text-sm text-slate-500">
+            {{ caseStore.headerVM.vendor_name }}
+          </div>
+
+          <div class="text-xs text-slate-400 mt-1">
+            Updated {{ formatTsBKK(caseStore.headerVM.updated_at) }}
+          </div>
+        </div>
+
+        <div class="text-right">
+          <div class="flex gap-2 justify-end">
+            <span class="px-2 py-1 bg-red-100 text-red-700 rounded text-xs">
+              {{ caseStore.headerVM.decision }}
+            </span>
+
+            <span class="px-2 py-1 bg-slate-100 rounded text-xs">
+              {{ caseStore.headerVM.risk }}
+            </span>
+
+            <span class="px-2 py-1 bg-slate-100 rounded text-xs">
+              {{ caseStore.headerVM.confidence }}
+            </span>
+          </div>
+
+          <div class="text-sm text-slate-500 mt-2">
+            {{ caseStore.headerVM.item_count }} items •
+            {{ caseStore.headerVM.total_amount }}
+          </div>
+        </div>
+      </div>
+
+      <!-- Collapse toggle -->
+      <div class="mt-4">
+        <button
+          class="text-sm text-blue-600"
+          @click="caseStore.toggleLineItems()"
+        >
+          {{ caseStore.isLineItemsExpanded ? 'Hide items' : 'Show items' }}
+        </button>
+      </div>
+    </div>
+
+    <!-- Line Items -->
+    <div
+      v-if="caseStore.isLineItemsExpanded"
+      class="bg-white rounded border"
+    >
+      <table class="w-full text-sm">
+        <thead class="bg-slate-100">
+          <tr>
+            <th class="px-4 py-2 text-left">SKU</th>
+            <th class="px-4 py-2 text-left">Item</th>
+            <th class="px-4 py-2 text-right">Qty</th>
+            <th class="px-4 py-2 text-right">Unit</th>
+            <th class="px-4 py-2 text-right">Total</th>
+          </tr>
+        </thead>
+
+        <tbody>
+          <tr
+            v-for="item in caseStore.lineItems"
+            :key="item.item_id"
+            class="border-t"
+          >
+            <td class="px-4 py-2">{{ item.sku }}</td>
+            <td class="px-4 py-2">{{ item.item_name }}</td>
+            <td class="px-4 py-2 text-right">{{ item.quantity }}</td>
+            <td class="px-4 py-2 text-right">{{ item.unit_price }}</td>
+            <td class="px-4 py-2 text-right font-medium">
+              {{ item.total_price }}
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
 
   </div>
+
+
+
 <!-- ================= PDF PREVIEW MODAL ================= -->
 <div
   v-if="store.pdfViewerUrl"

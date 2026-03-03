@@ -137,7 +137,7 @@ isExactActive ? 'tab-active' : 'tab-idle'
 <svg class="tab-icon" viewBox="0 0 24 24">
 <path d="M12 3l7 4v10l-7 4-7-4V7l7-4z" stroke="currentColor" stroke-width="2"/>
 </svg>
-Evidence
+Copilot
 </div>
 </RouterLink>
 

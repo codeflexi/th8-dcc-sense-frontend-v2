@@ -8,6 +8,10 @@ export interface Money {
   currency: string
 }
 
+/* =========================================================
+   Case Groups (existing - unchanged)
+========================================================= */
+
 export interface CaseGroupSku {
   item_id: string
   sku: string
@@ -48,7 +52,6 @@ export interface CaseGroup {
   baseline?: GroupBaseline
   evidence_refs?: GroupEvidenceRefs
 
-  // optional: used only for finance_ap normalization (does not affect procurement)
   __domain?: string
   raw_trace?: any
 }
@@ -58,6 +61,10 @@ export interface CaseGroupsResponse {
   run_id?: string
   groups: CaseGroup[]
 }
+
+/* =========================================================
+   Rules
+========================================================= */
 
 export interface RuleCalculation {
   field: string
@@ -72,8 +79,6 @@ export interface GroupRule {
   result: string
   explanation: string
   calculation?: RuleCalculation
-
-  // optional (used by finance_ap UI to avoid PASS wording confusion)
   exec_message?: string
   audit_message?: string
 }
@@ -85,6 +90,10 @@ export interface GroupRulesResponse {
   confidence?: number
   rules: GroupRule[]
 }
+
+/* =========================================================
+   Evidence
+========================================================= */
 
 export interface EvidenceDocument {
   document_id: string
@@ -129,6 +138,10 @@ export interface GroupEvidenceResponse {
   evidences: EvidenceItem[]
 }
 
+/* =========================================================
+   Decision Run (THIS MATCHES YOUR RESPONSE EXACTLY)
+========================================================= */
+
 export type PriceContext = 'BASELINE' | '3WAY_MATCH' | string
 
 export interface DecisionRunPolicyRef {
@@ -145,7 +158,10 @@ export interface DecisionRunSummary {
     currency: string
     unit_variance_sum?: number
   }
-  top_reason_codes?: Array<{ code: string; count: number }>
+  top_reason_codes?: Array<{
+    code: string
+    count: number
+  }>
 }
 
 export interface DecisionRunItemIdentity {
@@ -225,6 +241,10 @@ export interface DecisionRunItem {
   created_at?: string
 }
 
+/* =========================================================
+   THIS IS YOUR /cases/{id}/view RESPONSE
+========================================================= */
+
 export interface DecisionRunViewContext {
   case_id: string
   run_id: string
@@ -235,7 +255,18 @@ export interface DecisionRunViewContext {
   items: DecisionRunItem[]
 }
 
-// legacy (old finance_ap payload)
+/* =========================================================
+   IMPORTANT:
+   CaseAggregateResponse MUST BE SAME AS DecisionRunViewContext
+   (DO NOT invent case/artifacts/tracks here)
+========================================================= */
+
+export type CaseAggregateResponse = DecisionRunViewContext
+
+/* =========================================================
+   Legacy finance_ap (unchanged)
+========================================================= */
+
 export interface FinanceDecisionResult {
   result_id?: string
   run_id?: string
@@ -257,4 +288,6 @@ export interface FinanceDecisionResultsResponse {
   results: FinanceDecisionResult[]
 }
 
-export type DecisionResultsResponse = DecisionRunViewContext | FinanceDecisionResultsResponse
+export type DecisionResultsResponse =
+  | DecisionRunViewContext
+  | FinanceDecisionResultsResponse
