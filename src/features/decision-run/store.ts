@@ -11,33 +11,46 @@ import type {
   EvidenceItem,
   DecisionRunViewContext,
   DecisionRunItem,
-  CaseAggregateResponse,
-  DecisionRunSummary
+  DecisionRunSummary,
 } from './types'
-
 
 type RightPanelTab = 'WHY' | 'EVIDENCE'
 
 /* =========================================================
    Helpers
-   ========================================================= */
+========================================================= */
 
 function riskScore(x: string) {
   const v = String(x || '').toUpperCase()
   return v === 'CRITICAL'
     ? 4
     : v === 'HIGH'
-    ? 3
-    : v === 'MEDIUM' || v === 'MED'
-    ? 2
-    : v === 'LOW'
-    ? 1
-    : 0
+      ? 3
+      : v === 'MEDIUM' || v === 'MED'
+        ? 2
+        : v === 'LOW'
+          ? 1
+          : 0
 }
 
 function safeNum(v: any): number {
   const n = Number(v)
   return Number.isFinite(n) ? n : 0
+}
+
+function normalizeDecision(v: any): string {
+  const x = String(v || '').trim()
+  return x || '—'
+}
+
+function normalizeRisk(v: any): string {
+  const x = String(v || '').trim()
+  return x || '—'
+}
+
+function normalizeConfidence(v: any): number | undefined {
+  const n = Number(v)
+  return Number.isFinite(n) ? n : undefined
 }
 
 function mapDecisionRunItemToGroup(it: DecisionRunItem): CaseGroup {
@@ -47,16 +60,22 @@ function mapDecisionRunItemToGroup(it: DecisionRunItem): CaseGroup {
 
   const poUnit = safeNum(price?.po_unit)
   const invUnit = safeNum(price?.inv_unit)
-  const baselineUnit = price?.baseline_unit != null ? safeNum(price?.baseline_unit) : null
+  const baselineUnit =
+    price?.baseline_unit != null ? safeNum(price?.baseline_unit) : null
 
   const total =
-    invUnit && qty?.inv != null ? invUnit * safeNum(qty?.inv) : poUnit * safeNum(qty?.po)
+    invUnit && qty?.inv != null
+      ? invUnit * safeNum(qty?.inv)
+      : poUnit * safeNum(qty?.po)
 
   const cur = String(price?.currency || 'THB')
 
-  const decision = String(it?.status?.decision || it?.next_action || 'REVIEW')
-  const risk = String(it?.status?.risk || 'LOW')
-  const confidence = it?.status?.confidence
+  // IMPORTANT:
+  // Frontend must use backend decision/risk only.
+  // Do NOT fallback to next_action for row status.
+  const decision = normalizeDecision(it?.status?.decision)
+  const risk = normalizeRisk(it?.status?.risk)
+  const confidence = normalizeConfidence(it?.status?.confidence)
 
   return {
     group_id: String(it?.group_id || ''),
@@ -81,7 +100,9 @@ function mapDecisionRunItemToGroup(it: DecisionRunItem): CaseGroup {
     },
 
     baseline:
-      ctx === 'BASELINE' && baselineUnit != null ? { value: baselineUnit, currency: cur } : undefined,
+      baselineUnit != null
+        ? { value: baselineUnit, currency: cur }
+        : undefined,
 
     reasons: Array.isArray(it?.drivers)
       ? it.drivers.map((d: any) => ({
@@ -98,10 +119,14 @@ function mapDecisionRunItemToGroup(it: DecisionRunItem): CaseGroup {
 
 /* =========================================================
    Store
-   ========================================================= */
+========================================================= */
 
 export const useDecisionRunStore = defineStore('decisionRun', () => {
   const currentCaseId = ref<string>('')
+
+  // Single source of truth for current run view
+  const decisionView = ref<DecisionRunViewContext | null>(null)
+  const caseMaster = ref<DecisionRunSummary | null>(null)
 
   const groups = ref<CaseGroup[]>([])
   const activeGroupId = ref<string>('')
@@ -111,13 +136,13 @@ export const useDecisionRunStore = defineStore('decisionRun', () => {
   const loadingGroups = ref(false)
   const loadingRules = ref(false)
   const loadingEvidence = ref(false)
+  const rerunningCase = ref(false)
 
   const rulesCache = ref<Record<string, GroupRulesResponse>>({})
   const evidenceCache = ref<Record<string, GroupEvidenceResponse>>({})
-  const caseMaster = ref<DecisionRunSummary | null>(null)
 
   /* ===============================
-     PDF Viewer (เดิม)
+     PDF Viewer
   =============================== */
 
   const pdfViewerUrl = ref<string | null>(null)
@@ -132,83 +157,117 @@ export const useDecisionRunStore = defineStore('decisionRun', () => {
   }
 
   /* ===============================
-     Header Aggregate (NEW, isolated)
+     Derived
   =============================== */
 
-  const caseAggregate = ref<CaseAggregateResponse | null>(null)
-  const loadingCaseAggregate = ref(false)
-  const rerunningCase = ref(false)
-  
-
-  async function rerunCase(caseId: string) {
-    if (!caseId) return
-    rerunningCase.value = true
-    try {
-      await decisionRunApi.rerunCase(caseId)
-      // refresh header + body
-      // await loadCaseAggregate(caseId)
-      await loadCase(caseId)
-    } finally {
-      rerunningCase.value = false
-    }
-  }
-
-  /* ===============================
-     Derived (เดิม)
-  =============================== */
-
-  const activeGroup = computed(() => groups.value.find(g => g.group_id === activeGroupId.value) || null)
+  const activeGroup = computed<CaseGroup | null>(() => {
+    return groups.value.find(g => g.group_id === activeGroupId.value) || null
+  })
 
   const activeRules = computed<GroupRule[]>(() => {
     const gid = activeGroupId.value
-    return gid && rulesCache.value[gid]?.rules ? rulesCache.value[gid].rules : []
+    return gid && rulesCache.value[gid]?.rules
+      ? rulesCache.value[gid].rules
+      : []
   })
 
   const activeEvidenceDocs = computed<EvidenceDocument[]>(() => {
     const gid = activeGroupId.value
-    return gid && evidenceCache.value[gid]?.documents ? evidenceCache.value[gid].documents : []
+    return gid && evidenceCache.value[gid]?.documents
+      ? evidenceCache.value[gid].documents
+      : []
   })
 
   const activeEvidenceItems = computed<EvidenceItem[]>(() => {
     const gid = activeGroupId.value
-    return gid && evidenceCache.value[gid]?.evidences ? evidenceCache.value[gid].evidences : []
+    return gid && evidenceCache.value[gid]?.evidences
+      ? evidenceCache.value[gid].evidences
+      : []
   })
 
   /* ===============================
-     Internal (เดิม)
+     Internal
   =============================== */
 
   function resetForNewCase(caseId: string) {
     currentCaseId.value = caseId
+    decisionView.value = null
+    caseMaster.value = null
+
     groups.value = []
     activeGroupId.value = ''
     activeTab.value = 'WHY'
+
     rulesCache.value = {}
     evidenceCache.value = {}
+
     pdfViewerUrl.value = null
-    // IMPORTANT: do NOT reset caseAggregate (header โหลดแยก)
   }
 
-  async function preloadAllEvidence() {
-    if (!groups.value.length) return
+  function buildRulesCache(items: DecisionRunItem[]): Record<string, GroupRulesResponse> {
+    const nextRules: Record<string, GroupRulesResponse> = {}
 
-    const nextEvidence: Record<string, GroupEvidenceResponse> = {}
+    for (const it of items) {
+      const gid = String(it?.group_id || '')
+      if (!gid) continue
 
-    for (const g of groups.value) {
-      const gid = g.group_id
-      try {
-        const res = await decisionRunApi.getGroupEvidence(gid)
-        nextEvidence[gid] = res
-      } catch {
-        nextEvidence[gid] = {
-          group_id: gid,
-          documents: [],
-          evidences: [],
-        }
+      nextRules[gid] = {
+        group_id: gid,
+        decision: normalizeDecision(it?.status?.decision),
+        risk_level: normalizeRisk(it?.status?.risk),
+        confidence: normalizeConfidence(it?.status?.confidence),
+        rules: Array.isArray(it?.rules)
+          ? it.rules.map((r: any) => ({
+              rule_id: String(r?.rule_id || ''),
+              severity: String(r?.severity || ''),
+              result: String(r?.result || ''),
+              explanation: String(
+                r?.exec_message || r?.audit_message || r?.rule_id || ''
+              ),
+              exec_message: r?.exec_message,
+              audit_message: r?.audit_message,
+              calculation: r?.calculation || undefined,
+            }))
+          : [],
       }
     }
 
-    evidenceCache.value = nextEvidence
+    return nextRules
+  }
+
+  async function preloadAllEvidence() {
+    if (!groups.value.length) {
+      evidenceCache.value = {}
+      return
+    }
+
+    loadingEvidence.value = true
+
+    try {
+      const entries = await Promise.all(
+        groups.value.map(async (g) => {
+          const gid = g.group_id
+
+          try {
+            const res = await decisionRunApi.getGroupEvidence(gid)
+            return [gid, res] as const
+          } catch {
+            return [
+              gid,
+              {
+                group_id: gid,
+                documents: [],
+                evidences: [],
+              },
+            ] as const
+          }
+        })
+      )
+
+      evidenceCache.value = Object.fromEntries(entries)
+    } finally {
+      loadingEvidence.value = false
+    }
   }
 
   async function loadCase(caseId: string) {
@@ -216,68 +275,87 @@ export const useDecisionRunStore = defineStore('decisionRun', () => {
 
     resetForNewCase(caseId)
     loadingGroups.value = true
+    loadingRules.value = true
 
     try {
-      const view: DecisionRunViewContext = await decisionRunApi.getDecisionRunView(caseId)
-      caseMaster.value = view.summary
-      
+      const view = await decisionRunApi.getDecisionRunView(caseId)
+
+      decisionView.value = view
+      caseMaster.value = view.summary || null
+
       const items = Array.isArray(view.items) ? view.items : []
       const mapped = items.map(mapDecisionRunItemToGroup)
 
       groups.value = [...mapped].sort(
-        (a, b) => riskScore(String(b.risk_level || '')) - riskScore(String(a.risk_level || ''))
+        (a, b) =>
+          riskScore(String(b.risk_level || '')) -
+          riskScore(String(a.risk_level || ''))
       )
 
-      const nextRules: Record<string, GroupRulesResponse> = {}
-
-      for (const g of groups.value) {
-        const gid = g.group_id
-        const raw = g.raw_trace || {}
-
-        nextRules[gid] = {
-          group_id: gid,
-          decision: g.decision,
-          risk_level: g.risk_level,
-          confidence: g.confidence,
-          rules: (raw.rules || []).map((r: any) => ({
-            rule_id: r.rule_id,
-            severity: r.severity,
-            result: r.result,
-            explanation: r.exec_message || r.audit_message || '',
-            exec_message: r.exec_message,
-            audit_message: r.audit_message,
-            calculation: r.calculation,
-          })),
-        }
-      }
-
-      rulesCache.value = nextRules
-
-      await preloadAllEvidence()
+      rulesCache.value = buildRulesCache(items)
 
       if (groups.value.length) {
         activeGroupId.value = groups.value[0].group_id
       }
+
+      await preloadAllEvidence()
     } finally {
       loadingGroups.value = false
+      loadingRules.value = false
     }
   }
 
-  async function selectGroup(groupId: string, opts?: { openEvidence?: boolean }) {
+  async function rerunCase(caseId: string) {
+    if (!caseId) return
+
+    rerunningCase.value = true
+    try {
+      await decisionRunApi.rerunCase(caseId)
+      await loadCase(caseId)
+    } finally {
+      rerunningCase.value = false
+    }
+  }
+
+  async function selectGroup(
+    groupId: string,
+    opts?: { openEvidence?: boolean }
+  ) {
     if (!groupId) return
+
     activeGroupId.value = groupId
     activeTab.value = opts?.openEvidence ? 'EVIDENCE' : 'WHY'
+
+    if (!evidenceCache.value[groupId]) {
+      loadingEvidence.value = true
+      try {
+        evidenceCache.value[groupId] = await decisionRunApi.getGroupEvidence(groupId)
+      } catch {
+        evidenceCache.value[groupId] = {
+          group_id: groupId,
+          documents: [],
+          evidences: [],
+        }
+      } finally {
+        loadingEvidence.value = false
+      }
+    }
   }
 
   return {
-    // existing exports
     currentCaseId,
+
+    decisionView,
+    caseMaster,
+
     groups,
     activeGroupId,
     activeTab,
+
     loadingGroups,
     loadingRules,
     loadingEvidence,
+    rerunningCase,
 
     activeGroup,
     activeRules,
@@ -289,14 +367,7 @@ export const useDecisionRunStore = defineStore('decisionRun', () => {
     closePdf,
 
     loadCase,
-    selectGroup,
-
-    // header exports (NEW)
-    caseMaster,
-    caseAggregate,
-    loadingCaseAggregate,
-    rerunningCase,
- 
     rerunCase,
+    selectGroup,
   }
 })

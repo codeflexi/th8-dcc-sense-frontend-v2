@@ -33,7 +33,7 @@ export const useCaseStore = defineStore('caseMaster', () => {
 
   /* ================= UI STATE ================= */
 
-  const isLineItemsExpanded = ref(true)
+  const isLineItemsExpanded = ref(false)
 
   function toggleLineItems() {
     isLineItemsExpanded.value = !isLineItemsExpanded.value
