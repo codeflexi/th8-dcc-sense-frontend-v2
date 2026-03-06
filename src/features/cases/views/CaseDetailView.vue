@@ -4,6 +4,14 @@ import { useRoute, useRouter, RouterLink } from 'vue-router'
 import { getCaseDetail , getCaseDecisionSummary } from '@/features/cases/api'
 import type { CaseDetailHeader } from '@/features/cases/types'
 import { useCaseDetailStore } from '@/features/cases/store'
+import { storeToRefs } from 'pinia'
+import { useCaseStore } from '@/features/decision-run/case_master_store'
+
+
+
+const caseStore = useCaseStore()
+
+const { headerVM, loadingAggregate } = storeToRefs(caseStore)
 
 const store = useCaseDetailStore()
 const route = useRoute()
@@ -47,7 +55,9 @@ async function loadCaseSummary(id: string) {
   }
 }
 
+
 watch(caseId, async (id) => {
+  caseStore.loadCaseAggregate(id),
   await loadCase(id)
   await loadCaseSummary(id)
 }, { immediate: true })
@@ -75,23 +85,25 @@ class="text-sm text-slate-500 hover:text-slate-900 mb-3"
 <div>
 <div class="text-xs text-slate-400">Case</div>
 <div class="text-lg font-bold">
-{{ caseHD?.entity_name || caseId }}  
-{{ caseHD?.vendor ? '· ' + caseHD.vendor : '' }}
+{{ headerVM?.case_id || caseId }}  
+{{ headerVM?.reference_id ? '· ' + headerVM?.reference_id: '' }}
 </div>
 
 <div class="text-sm text-slate-500">
-{{ caseHD?.reference_id || '-' }}
-{{ caseHD?.po_number ? '· ' + caseHD.po_number : '' }}
-· {{ caseHD?.domain || '-' }}
-{{ caseHD?.created_at ? '· ' + new Date(caseHD.created_at).toLocaleDateString() : '' }}
+
+{{ headerVM?.domain ? '· ' + headerVM?.reference_id : '' }} 
+· {{ headerVM?.domain || '-' }}
+{{ caseStore.aggregate?.case.created_at ? '· ' + new Date(caseStore.aggregate?.case.created_at ).toLocaleDateString() : '' }}
 </div>
 </div>
+
+{{ }}
 
 <!-- RIGHT -->
 <div class="text-right">
 <div class="text-xs text-slate-400">Total Amount</div>
 <div class="text-xl font-mono font-bold">
-{{ caseHD?.amount_total?.toLocaleString() || 0 }}
+{{ headerVM?.total_amount?.toLocaleString() || 0 }}
 {{ caseHD?.currency || 'THB' }}
 </div>
 </div>
